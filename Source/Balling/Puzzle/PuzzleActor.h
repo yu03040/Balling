@@ -61,13 +61,26 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Puzzle|Materials")
 	TObjectPtr<UMaterialInterface> FloorMaterial;
 
-	// 外壁（Section 1）に適用するマテリアル
+	// 外壁外側・上面（Section 1）に適用するマテリアル
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Puzzle|Materials")
 	TObjectPtr<UMaterialInterface> WallMaterial;
+
+	// 外壁内側（Section 2）に適用するマテリアル
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Puzzle|Materials")
+	TObjectPtr<UMaterialInterface> WallInnerMaterial;
+
+	// true にすると床メッシュを非表示にして背景を透過させる
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Puzzle|Materials")
+	bool bFloorTransparent = false;
 
 	// ゴール出口の定義リスト（エッジ番号・中心位置・幅を指定）
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Puzzle|Exit")
 	TArray<FExitGap> ExitGaps;
+
+	// ゲーム開始時のスピン角（度）。配置回転とは独立に出口の向きを調整できる
+	// 正値 = CCW 方向、負値 = CW 方向
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Puzzle|Rotation")
+	float InitialSpinAngleDeg = 0.f;
 
 	// 頂点リストから ProceduralMesh とコリジョンを再生成する
 	UFUNCTION(BlueprintCallable, Category = "Puzzle")
@@ -86,6 +99,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Puzzle")
 	void ResetRotation();
 
+	// 指定したスピン角へ即座にスナップする
+	void SnapToAngle(float TargetSpinAngle);
+
 protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Puzzle")
 	TObjectPtr<UProceduralMeshComponent> ProcMesh;
@@ -102,7 +118,9 @@ private:
 
 	float RotationSpeed = 0.f;
 	bool bWasBallInside = true;
-	FRotator InitialRotation;
+
+	FQuat  InitialQuat;       // BeginPlay 時点の回転（クォータニオン）
+	float  SpinAngleDeg = 0.f; // 初期姿勢からの累積スピン角（度）
 
 	UPROPERTY()
 	TWeakObjectPtr<APuzzleBall> PuzzleBall;

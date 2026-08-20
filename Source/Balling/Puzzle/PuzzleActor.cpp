@@ -12,6 +12,9 @@ APuzzleActor::APuzzleActor()
 	SetRootComponent(ProcMesh);
 	// 視覚専用。コリジョンは BuildWallColliders() の BoxComponent が担う
 	ProcMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	ProcMesh->SetCastShadow(false);
+	ProcMesh->bAffectDistanceFieldLighting = false;
+	ProcMesh->bVisibleInRayTracing = false;
 
 	// デフォルト形状: 正六角形（Stage 1 と同形）、半径 300 UU
 	const int32 Sides = 6;
@@ -30,7 +33,15 @@ void APuzzleActor::BeginPlay()
 	Super::BeginPlay();
 	BuildWallColliders();
 
-	InitialRotation = GetActorRotation();
+	InitialQuat  = GetActorTransform().GetRotation();
+	SpinAngleDeg = InitialSpinAngleDeg;
+
+	// 初期スピン角を視覚に反映する
+	if (!FMath::IsNearlyZero(SpinAngleDeg))
+	{
+		const FQuat SpinQuat(FVector::UpVector, FMath::DegreesToRadians(SpinAngleDeg));
+		SetActorRotation((InitialQuat * SpinQuat).Rotator());
+	}
 
 	AActor* Found = UGameplayStatics::GetActorOfClass(GetWorld(), APuzzleBall::StaticClass());
 	PuzzleBall = Cast<APuzzleBall>(Found);
@@ -49,7 +60,9 @@ void APuzzleActor::Tick(float DeltaTime)
 
 	if (!FMath::IsNearlyZero(RotationSpeed))
 	{
-		AddActorLocalRotation(FRotator(0.f, RotationSpeed * DeltaTime, 0.f));
+		SpinAngleDeg += RotationSpeed * DeltaTime;
+		const FQuat SpinQuat(FVector::UpVector, FMath::DegreesToRadians(SpinAngleDeg));
+		SetActorRotation((InitialQuat * SpinQuat).Rotator());
 	}
 
 	// ボールがパズル外枠を出たか毎フレーム判定する
@@ -98,11 +111,13 @@ void APuzzleActor::BuildMesh()
 
 	ProcMesh->SetMaterial(0, FloorMaterial);
 	ProcMesh->SetMaterial(1, WallMaterial);
+	ProcMesh->SetMaterial(2, WallInnerMaterial);
+	ProcMesh->SetMeshSectionVisible(0, !bFloorTransparent);
 }
 
 float APuzzleActor::GetCurrentAngle() const
 {
-	return GetActorRotation().Yaw;
+	return SpinAngleDeg;
 }
 
 void APuzzleActor::SetRotationSpeed(float DegreesPerSecond)
@@ -110,10 +125,20 @@ void APuzzleActor::SetRotationSpeed(float DegreesPerSecond)
 	RotationSpeed = DegreesPerSecond;
 }
 
+void APuzzleActor::SnapToAngle(float TargetSpinAngle)
+{
+	RotationSpeed = 0.f;
+	SpinAngleDeg  = TargetSpinAngle;
+	const FQuat SpinQuat(FVector::UpVector, FMath::DegreesToRadians(SpinAngleDeg));
+	SetActorRotation((InitialQuat * SpinQuat).Rotator());
+}
+
 void APuzzleActor::ResetRotation()
 {
 	RotationSpeed = 0.f;
-	SetActorRotation(InitialRotation);
+	SpinAngleDeg  = InitialSpinAngleDeg;
+	const FQuat SpinQuat(FVector::UpVector, FMath::DegreesToRadians(SpinAngleDeg));
+	SetActorRotation((InitialQuat * SpinQuat).Rotator());
 	bWasBallInside = true;
 }
 
@@ -182,13 +207,16 @@ void APuzzleActor::BuildWalls()
 {
 	const int32 N = Vertices.Num();
 
-	TArray<FVector> Verts;
-	TArray<int32> Tris;
-	TArray<FVector> Normals;
-	TArray<FVector2D> UVs;
+	// Section 1: 外側面 + 上面（WallMaterial）
+	TArray<FVector>  OuterVerts,  InnerVerts;
+	TArray<int32>    OuterTris,   InnerTris;
+	TArray<FVector>  OuterNormals, InnerNormals;
+	TArray<FVector2D> OuterUVs,   InnerUVs;
 
-	// 面を追加するヘルパー（外側から見て CW = UE フロントフェイス）
-	auto AddFace = [&](const FVector& A, const FVector& B, const FVector& C, const FVector& D, const FVector& Normal)
+	auto AddFaceTo = [](
+		TArray<FVector>& Verts, TArray<int32>& Tris,
+		TArray<FVector>& Normals, TArray<FVector2D>& UVs,
+		const FVector& A, const FVector& B, const FVector& C, const FVector& D, const FVector& Normal)
 	{
 		const int32 Base = Verts.Num();
 		Verts.Add(A); Verts.Add(B); Verts.Add(C); Verts.Add(D);
@@ -212,8 +240,7 @@ void APuzzleActor::BuildWalls()
 		const FVector InN ( InwardNormal2D.X,  InwardNormal2D.Y, 0.f);
 		const FVector OutN(OutwardNormal2D.X, OutwardNormal2D.Y, 0.f);
 
-		// エッジに出口穴があれば 2 セグメントに分割、なければ 1 セグメント
-		TArray<TPair<float,float>> Segs; // (startDist, endDist)
+		TArray<TPair<float,float>> Segs;
 		const FExitGap* Gap = ExitGaps.FindByPredicate(
 			[i](const FExitGap& G){ return G.EdgeIndex == i; });
 		if (Gap)
@@ -246,13 +273,21 @@ void APuzzleActor::BuildWalls()
 			const FVector AiT(SAI.X, SAI.Y, WallHeight);
 			const FVector BiT(SBI.X, SBI.Y, WallHeight);
 
-			AddFace(AiT, BiT, Bi, Ai, InN);             // 内面
-			AddFace(Bo,  Ao,  AoT, BoT, OutN);          // 外面
-			AddFace(AoT, BoT, BiT, AiT, FVector::UpVector); // 上面
+			// Section 2: 内面（WallInnerMaterial）
+			AddFaceTo(InnerVerts, InnerTris, InnerNormals, InnerUVs,
+				AiT, BiT, Bi, Ai, InN);
+
+			// Section 1: 外面 + 上面（WallMaterial）
+			AddFaceTo(OuterVerts, OuterTris, OuterNormals, OuterUVs,
+				Bo,  Ao,  AoT, BoT, OutN);
+			AddFaceTo(OuterVerts, OuterTris, OuterNormals, OuterUVs,
+				AoT, BoT, BiT, AiT, FVector::UpVector);
 		}
 	}
 
-	ProcMesh->CreateMeshSection(1, Verts, Tris, Normals, UVs,
+	ProcMesh->CreateMeshSection(1, OuterVerts, OuterTris, OuterNormals, OuterUVs,
+		TArray<FColor>(), TArray<FProcMeshTangent>(), /*bCreateCollision=*/false);
+	ProcMesh->CreateMeshSection(2, InnerVerts, InnerTris, InnerNormals, InnerUVs,
 		TArray<FColor>(), TArray<FProcMeshTangent>(), /*bCreateCollision=*/false);
 }
 
@@ -286,6 +321,9 @@ void APuzzleActor::BuildWallColliders()
 		Box->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 		Box->SetCollisionObjectType(ECC_WorldDynamic);
 		Box->SetCollisionResponseToAllChannels(ECR_Block);
+		Box->SetCastShadow(false);
+		//Box->bAffectDistanceFieldLighting = false;
+		//Box->bVisibleInRayTracing = false;
 		Box->RegisterComponent();
 		AddInstanceComponent(Box);
 		WallColliders.Add(Box);
@@ -342,21 +380,36 @@ void APuzzleActor::BuildWallColliders()
 		WallColliders.Add(Corner);
 	}
 
-	// 床コリジョン: パズル全体を覆うフラットなボックス
+	// 前後キャップ: パズルの奥行き方向（ローカル Z 軸）を両側で塞ぐ
+	// 出口（ExitGap）は周壁の辺方向に開くため、これらのキャップとは干渉しない
 	FBox2D Bounds(ForceInit);
 	for (const FVector2D& V : Vertices) { Bounds += V; }
-	const FVector2D BoundsSize = Bounds.GetSize();
+	const FVector2D BoundsSize   = Bounds.GetSize();
 	const FVector2D BoundsCenter = Bounds.GetCenter();
 
-	UBoxComponent* FloorBox = NewObject<UBoxComponent>(this);
-	FloorBox->SetupAttachment(RootComponent);
-	FloorBox->SetBoxExtent(FVector(BoundsSize.X * 0.5f, BoundsSize.Y * 0.5f, 1.f));
-	FloorBox->SetRelativeLocation(FVector(BoundsCenter.X, BoundsCenter.Y, -1.f));
-	FloorBox->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
-	FloorBox->SetCollisionObjectType(ECC_WorldDynamic);
-	FloorBox->SetCollisionResponseToAllChannels(ECR_Block);
-	FloorBox->RegisterComponent();
-	AddInstanceComponent(FloorBox);
+	// 背面キャップ（ローカル Z <= 0 側）
+	UBoxComponent* BackBox = NewObject<UBoxComponent>(this);
+	BackBox->SetupAttachment(RootComponent);
+	BackBox->SetBoxExtent(FVector(BoundsSize.X * 0.5f, BoundsSize.Y * 0.5f, 1.f));
+	BackBox->SetRelativeLocation(FVector(BoundsCenter.X, BoundsCenter.Y, -1.f));
+	BackBox->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	BackBox->SetCollisionObjectType(ECC_WorldDynamic);
+	BackBox->SetCollisionResponseToAllChannels(ECR_Block);
+	BackBox->SetCastShadow(false);
+	BackBox->RegisterComponent();
+	AddInstanceComponent(BackBox);
+	WallColliders.Add(BackBox);
 
-	WallColliders.Add(FloorBox);
+	// 前面キャップ（ローカル Z >= WallHeight 側 = カメラ向き面）
+	UBoxComponent* FrontBox = NewObject<UBoxComponent>(this);
+	FrontBox->SetupAttachment(RootComponent);
+	FrontBox->SetBoxExtent(FVector(BoundsSize.X * 0.5f, BoundsSize.Y * 0.5f, 1.f));
+	FrontBox->SetRelativeLocation(FVector(BoundsCenter.X, BoundsCenter.Y, WallHeight + 1.f));
+	FrontBox->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	FrontBox->SetCollisionObjectType(ECC_WorldDynamic);
+	FrontBox->SetCollisionResponseToAllChannels(ECR_Block);
+	FrontBox->SetCastShadow(false);
+	FrontBox->RegisterComponent();
+	AddInstanceComponent(FrontBox);
+	WallColliders.Add(FrontBox);
 }

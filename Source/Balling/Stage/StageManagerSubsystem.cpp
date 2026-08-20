@@ -77,16 +77,7 @@ void UStageManagerSubsystem::OnBallExited()
 
 	ClearedStages[Current - 1] = true;
 	SaveProgress();
-
-	if (Current < TotalStages)
-	{
-		OpenStage(Current + 1);
-	}
-	else
-	{
-		// 全ステージクリア → メインメニューへ
-		OpenMainMenu();
-	}
+	// 遷移は UClearWidget のボタンが担う
 }
 
 void UStageManagerSubsystem::SaveProgress()

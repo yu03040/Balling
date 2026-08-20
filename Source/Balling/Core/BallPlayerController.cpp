@@ -1,6 +1,9 @@
-#include "BallPlayerController.h"
+﻿#include "BallPlayerController.h"
 #include "Balling/Puzzle/PuzzleActor.h"
 #include "Balling/UI/HourglassWidget.h"
+#include "Balling/UI/KeyIndicatorWidget.h"
+#include "Balling/UI/ResetWidget.h"
+#include "Balling/UI/ClearWidget.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "InputMappingContext.h"
@@ -35,6 +38,21 @@ ABallPlayerController::ABallPlayerController()
 	{
 		HourglassWidgetClass = WidgetFinder.Class;
 	}
+
+	static ConstructorHelpers::FClassFinder<UKeyIndicatorWidget> KeyIndicatorFinder(
+		TEXT("/Game/Blueprints/UI/WBP_KeyIndicatorWidget"));
+	if (KeyIndicatorFinder.Succeeded())
+	{
+		KeyIndicatorWidgetClass = KeyIndicatorFinder.Class;
+	}
+
+	static ConstructorHelpers::FClassFinder<UResetWidget> ResetWidgetFinder(
+		TEXT("/Game/Blueprints/UI/WBP_ResetWidget"));
+	if (ResetWidgetFinder.Succeeded())
+	{
+		ResetWidgetClass = ResetWidgetFinder.Class;
+	}
+
 }
 
 void ABallPlayerController::BeginPlay()
@@ -76,6 +94,57 @@ void ABallPlayerController::BeginPlay()
 			Widget->SetRenderOpacity(0.f); // 初期は透明。NativeTick が表示を制御する
 		}
 	}
+
+	UE_LOG(LogTemp, Warning, TEXT("KeyIndicator: WidgetClass=%s"),
+		KeyIndicatorWidgetClass ? *KeyIndicatorWidgetClass->GetName() : TEXT("NULL"));
+
+	if (KeyIndicatorWidgetClass)
+	{
+		UKeyIndicatorWidget* KeyWidget = CreateWidget<UKeyIndicatorWidget>(this, KeyIndicatorWidgetClass);
+		UE_LOG(LogTemp, Warning, TEXT("KeyIndicator: Widget=%s"),
+			KeyWidget ? TEXT("Created") : TEXT("NULL"));
+		if (KeyWidget)
+		{
+			KeyWidget->AddToViewport();
+			KeyWidget->SetVisibility(ESlateVisibility::HitTestInvisible);
+		}
+	}
+
+	if (ResetWidgetClass)
+	{
+		ResetWidgetInstance = CreateWidget<UResetWidget>(this, ResetWidgetClass);
+		if (ResetWidgetInstance)
+		{
+			ResetWidgetInstance->AddToViewport();
+		}
+	}
+
+	// FClassFinder は static で一度しか走らないため、BeginPlay で毎回ロードする
+	if (!ClearWidgetClass)
+	{
+		ClearWidgetClass = LoadClass<UClearWidget>(
+			nullptr, TEXT("/Game/Blueprints/UI/WBP_StageClear.WBP_StageClear_C"));
+	}
+	UE_LOG(LogTemp, Warning, TEXT("BallPC: ClearWidgetClass=%s"),
+		ClearWidgetClass ? *ClearWidgetClass->GetName() : TEXT("NULL"));
+
+	if (ClearWidgetClass)
+	{
+		ClearWidgetInstance = CreateWidget<UClearWidget>(this, ClearWidgetClass);
+		if (ClearWidgetInstance)
+		{
+			ClearWidgetInstance->AddToViewport(10); // ResetWidget より前面
+		}
+	}
+
+	UE_LOG(LogTemp, Warning, TEXT("BallPC: PuzzleBall=%s"),
+		PuzzleBall.IsValid() ? *PuzzleBall->GetName() : TEXT("NULL"));
+
+	if (PuzzleBall.IsValid())
+	{
+		PuzzleBall->OnBallExited.AddDynamic(this, &ABallPlayerController::OnGameClear);
+		UE_LOG(LogTemp, Warning, TEXT("BallPC: OnBallExited bound"));
+	}
 }
 
 void ABallPlayerController::SetupInputComponent()
@@ -93,12 +162,21 @@ void ABallPlayerController::SetupInputComponent()
 		}
 	}
 
-	InputComponent->BindKey(EKeys::R, IE_Pressed, this, &ABallPlayerController::ResetStage);
+	InputComponent->BindKey(EKeys::R, IE_Pressed, this, &ABallPlayerController::OnResetPressed);
 }
 
 void ABallPlayerController::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
+
+	if (bGameCleared)
+	{
+		if (PuzzleActor.IsValid())
+		{
+			PuzzleActor->SetRotationSpeed(0.f);
+		}
+		return;
+	}
 
 	float NewSpeed = 0.f;
 
@@ -106,26 +184,41 @@ void ABallPlayerController::Tick(float DeltaTime)
 	{
 		if (HourglassGauge > 0.f)
 		{
-			const float Delta = RotationSpeed * DeltaTime;
-			HourglassGauge  = FMath::Max(0.f, HourglassGauge - GaugeDrainRate * DeltaTime);
-			RotationDebt   += Delta; // CCW 回転した分を借金として積む
-			NewSpeed        = RotationSpeed; // CCW
+			// 新規プレス開始（借金ゼロの状態から押した）ときに基準角を記録する
+			if (RotationDebt < KINDA_SMALL_NUMBER && PuzzleActor.IsValid())
+			{
+				RotationAtPressStart = PuzzleActor->GetCurrentAngle();
+			}
+			RotationDebt += RotationSpeed * DeltaTime;
+			NewSpeed      = RotationSpeed; // CCW
 		}
-		// ゲージ枯渇中は回転しない（借金も増えない）
 	}
 	else
 	{
-		// ゲージ回復
-		HourglassGauge = FMath::Min(1.f, HourglassGauge + GaugeRecoverRate * DeltaTime);
-
-		// 借金が残っている間だけ CW で返す
 		if (RotationDebt > 0.f)
 		{
-			const float PayBack = FMath::Min(RotationSpeed * DeltaTime, RotationDebt);
-			RotationDebt -= PayBack;
-			NewSpeed      = -RotationSpeed; // CW
+			const float PayBack = RotationSpeed * DeltaTime;
+			if (PayBack >= RotationDebt)
+			{
+				// 最終フレーム: 基準角へ正確にスナップして誤差を消す
+				RotationDebt = 0.f;
+				if (PuzzleActor.IsValid())
+				{
+					PuzzleActor->SnapToAngle(RotationAtPressStart);
+				}
+			}
+			else
+			{
+				RotationDebt -= PayBack;
+				NewSpeed      = -RotationSpeed; // CW
+			}
 		}
 	}
+
+	// ゲージはデット量から直接計算。回転と常に同期する
+	// MaxDebt = RotationSpeed / GaugeDrainRate 度のとき Gauge = 0.0
+	const float MaxDebt = RotationSpeed / GaugeDrainRate;
+	HourglassGauge = FMath::Max(0.f, 1.0f - RotationDebt / MaxDebt);
 
 	if (PuzzleActor.IsValid())
 	{
@@ -143,6 +236,46 @@ void ABallPlayerController::OnHourglassCompleted(const FInputActionValue& Value)
 	bIsHoldingA = false;
 }
 
+void ABallPlayerController::OnResetPressed()
+{
+	if (bGameCleared) { return; }
+
+	if (ResetWidgetInstance)
+	{
+		// ウィジェット経由: フェード → リセット → フェード復帰
+		ResetWidgetInstance->TriggerReset();
+	}
+	else
+	{
+		// ウィジェット未設定時のフォールバック（フェードなし即時リセット）
+		ResetStage();
+	}
+}
+
+void ABallPlayerController::OnGameClear()
+{
+	UE_LOG(LogTemp, Warning, TEXT("BallPC: OnGameClear called"));
+	if (bGameCleared) { return; }
+	bGameCleared = true;
+
+	// 入力状態をリセットして回転を止める
+	bIsHoldingA  = false;
+	RotationDebt = 0.f;
+	if (PuzzleActor.IsValid())
+	{
+		PuzzleActor->SetRotationSpeed(0.f);
+	}
+
+	// 入力モードを UI 専用に切り替え、UClearWidget にキーボードフォーカスを渡す
+	if (ClearWidgetInstance)
+	{
+		FInputModeUIOnly UIMode;
+		UIMode.SetWidgetToFocus(ClearWidgetInstance->TakeWidget());
+		SetInputMode(UIMode);
+		ClearWidgetInstance->ShowClear();
+	}
+}
+
 void ABallPlayerController::ResetStage()
 {
 	if (PuzzleActor.IsValid())
@@ -153,7 +286,8 @@ void ABallPlayerController::ResetStage()
 	{
 		PuzzleBall->ResetToInitial();
 	}
-	HourglassGauge = 1.f;
-	bIsHoldingA    = false;
-	RotationDebt   = 0.f;
+	HourglassGauge       = 1.f;
+	bIsHoldingA          = false;
+	RotationDebt         = 0.f;
+	RotationAtPressStart = 0.f;
 }
