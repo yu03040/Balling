@@ -76,3 +76,6 @@ Plugins/**/Intermediate/*
 DerivedDataCache/*
 Content/Assets/Fonts/
 Content/Skills/
+Content/Assets/Textures/character/
+Content/Assets/Textures/title_bg2.uasset
+Content/Assets/Textures/ui_frame/
