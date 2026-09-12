@@ -53,6 +53,13 @@ ABallPlayerController::ABallPlayerController()
 		ResetWidgetClass = ResetWidgetFinder.Class;
 	}
 
+	static ConstructorHelpers::FClassFinder<UClearWidget> ClearWidgetFinder(
+		TEXT("/Game/Blueprints/UI/WBP_StageClear"));
+	if (ClearWidgetFinder.Succeeded())
+	{
+		ClearWidgetClass = ClearWidgetFinder.Class;
+	}
+
 }
 
 void ABallPlayerController::BeginPlay()
@@ -119,12 +126,6 @@ void ABallPlayerController::BeginPlay()
 		}
 	}
 
-	// FClassFinder は static で一度しか走らないため、BeginPlay で毎回ロードする
-	if (!ClearWidgetClass)
-	{
-		ClearWidgetClass = LoadClass<UClearWidget>(
-			nullptr, TEXT("/Game/Blueprints/UI/WBP_StageClear.WBP_StageClear_C"));
-	}
 	UE_LOG(LogTemp, Warning, TEXT("BallPC: ClearWidgetClass=%s"),
 		ClearWidgetClass ? *ClearWidgetClass->GetName() : TEXT("NULL"));
 

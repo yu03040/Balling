@@ -28,4 +28,5 @@ private:
 	void SetInitialFocus();
 
 	FTimerHandle FocusTimerHandle;
+	int32 FocusAttemptCount = 0;
 };

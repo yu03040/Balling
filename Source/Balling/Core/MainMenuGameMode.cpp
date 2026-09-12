@@ -9,6 +9,8 @@ AMainMenuGameMode::AMainMenuGameMode()
 
 void AMainMenuGameMode::SetInitialFocus()
 {
+	FocusAttemptCount++;
+
 	if (MainMenuWidgetInstance)
 	{
 		if (APlayerController* PC = GetWorld()->GetFirstPlayerController())
@@ -19,6 +21,12 @@ void AMainMenuGameMode::SetInitialFocus()
 			PC->SetInputMode(UIMode);
 		}
 		MainMenuWidgetInstance->FocusFirstButton();
+	}
+
+	// PIE起動時にエディタがフォーカスを奪い返す場合があるため最大5回リトライする
+	if (FocusAttemptCount < 5)
+	{
+		GetWorld()->GetTimerManager().SetTimer(FocusTimerHandle, this, &AMainMenuGameMode::SetInitialFocus, 0.15f, false);
 	}
 }
 

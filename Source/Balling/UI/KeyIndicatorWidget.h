@@ -5,6 +5,7 @@
 #include "KeyIndicatorWidget.generated.h"
 
 class ABallPlayerController;
+class UImage;
 
 UCLASS()
 class BALLING_API UKeyIndicatorWidget : public UUserWidget
@@ -15,16 +16,21 @@ protected:
 	virtual void NativeConstruct() override;
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 
+	UPROPERTY(meta = (BindWidget))
+	TObjectPtr<UImage> AButtonImage;
+
 public:
-	// Blueprint でキー押下状態を参照できる
 	UPROPERTY(BlueprintReadOnly, Category = "KeyIndicator")
 	bool bIsKeyPressed = false;
 
-	// Blueprint のバインド関数。押下中は明るい金色、離しているときは暗いグレー
 	UFUNCTION(BlueprintPure, Category = "KeyIndicator")
 	FLinearColor GetKeyColor() const;
 
 private:
+	bool bWasKeyPressed = false;
+
+	void UpdateAButtonImage();
+
 	UPROPERTY()
 	TWeakObjectPtr<ABallPlayerController> OwnerController;
 };

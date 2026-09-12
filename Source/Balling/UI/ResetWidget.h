@@ -7,6 +7,8 @@
 class ABallPlayerController;
 class UBorder;
 class UButton;
+class UImage;
+class UTexture2D;
 
 UCLASS()
 class BALLING_API UResetWidget : public UUserWidget
@@ -14,6 +16,8 @@ class BALLING_API UResetWidget : public UUserWidget
 	GENERATED_BODY()
 
 public:
+	UResetWidget(const FObjectInitializer& ObjectInitializer);
+
 	// R キーまたはボタンクリック共通エントリ（フェード進行中は無視）
 	UFUNCTION(BlueprintCallable, Category = "Reset")
 	void TriggerReset();
@@ -34,6 +38,10 @@ protected:
 	UPROPERTY(BlueprintReadOnly, meta = (BindWidget))
 	TObjectPtr<UButton> ResetButton;
 
+	// WBP 内に "ResetButtonImage" という名前の Image ウィジェットが必要
+	UPROPERTY(BlueprintReadOnly, meta = (BindWidget))
+	TObjectPtr<UImage> ResetButtonImage;
+
 private:
 	UFUNCTION()
 	void OnResetButtonClicked();
@@ -46,4 +54,7 @@ private:
 
 	UPROPERTY()
 	TWeakObjectPtr<ABallPlayerController> OwnerController;
+
+	UPROPERTY()
+	TObjectPtr<UTexture2D> ResetButtonTexture;
 };

@@ -2,6 +2,21 @@
 #include "Balling/Core/BallPlayerController.h"
 #include "Components/Border.h"
 #include "Components/Button.h"
+#include "Components/Image.h"
+#include "Styling/SlateBrush.h"
+#include "UObject/ConstructorHelpers.h"
+#include "Engine/Texture2D.h"
+
+UResetWidget::UResetWidget(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer)
+{
+	static ConstructorHelpers::FObjectFinder<UTexture2D> TexFinder(
+		TEXT("/Game/Assets/Textures/UI/T_R_Button_UI"));
+	if (TexFinder.Succeeded())
+	{
+		ResetButtonTexture = TexFinder.Object;
+	}
+}
 
 void UResetWidget::NativeConstruct()
 {
@@ -11,6 +26,15 @@ void UResetWidget::NativeConstruct()
 	if (ResetButton)
 	{
 		ResetButton->OnClicked.AddDynamic(this, &UResetWidget::OnResetButtonClicked);
+	}
+
+	if (ResetButtonImage && ResetButtonTexture)
+	{
+		FSlateBrush Brush;
+		Brush.SetResourceObject(ResetButtonTexture);
+		Brush.DrawAs = ESlateBrushDrawType::Image;
+		Brush.TintColor = FSlateColor(FLinearColor::White);
+		ResetButtonImage->SetBrush(Brush);
 	}
 
 	if (FadeOverlay)
